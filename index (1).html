@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GESTION PRO</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{--g:#0f766e;--bg:#f4f6f5;--t:#14201e}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--t)}
+header{background:var(--g);color:#fff;padding:14px 16px;font-weight:700}
+main{padding:12px;max-width:640px;margin:auto;padding-bottom:80px}
+.card{background:#fff;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 1px 3px #0002}
+input,select,button{width:100%;padding:12px;margin:5px 0;border:1px solid #ccd;border-radius:8px;font-size:16px}
+button{background:var(--g);color:#fff;border:0;font-weight:700}button.s{background:#e5e7eb;color:var(--t)}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#fff;border-top:1px solid #ddd}
+nav button{background:none;color:var(--t);border:0;border-radius:0;margin:0;font-size:13px}
+.k{display:grid;grid-template-columns:1fr 1fr;gap:8px}.k b{display:block;font-size:18px}
+.err{color:#b91c1c}.low{color:#b45309}
+</style></head><body>
+<header>GESTION PRO <small id="who"></small></header>
+<main id="app">Chargement…</main>
+<nav id="nav" hidden>
+<button onclick="go('home')">Accueil</button><button onclick="go('prod')">Produits</button>
+<button onclick="go('sale')">Vente</button><button onclick="go('exp')">Dépenses</button>
+<button onclick="out()">Quitter</button></nav>
+<script>
+// ===== À REMPLIR (clés PUBLIQUES du projet Supabase : Project Settings > API) =====
+const SUPABASE_URL="https://fymtwgulluwyqkvvtbmh.supabase.co", SUPABASE_ANON="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ5bXR3Z3VsbHV3eXFrdnZ0Ym1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMzAyNDIsImV4cCI6MjExMDcwNjI0Mn0.NhQCN8n9ByylPAkHeDy5Ae4vZBxGo92xkEuytTj2Pd0";
+// ==================================================================================
+const db=supabase.createClient(SUPABASE_URL,SUPABASE_ANON);
+const $=id=>document.getElementById(id), app=$("app");
+const F=n=>Number(n||0).toLocaleString("fr-FR")+" FCFA";
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";");
+let shop=null, cart=[], busy=false, saleKey=crypto.randomUUID();
+const msg=e=>"<p class=err>"+esc(e.message||e)+"</p>";
+
+async function init(){
+  const {data:{session}}=await db.auth.getSession();
+  if(!session) return authView();
+  $("who").textContent="· "+session.user.email;
+  const {data}=await db.from("shops").select("*").limit(1);
+  if(!data||!data.length) return shopView();
+  shop=data[0]; $("nav").hidden=false; go("home");
+}
+function authView(e){ $("nav").hidden=true;
+  app.innerHTML=`<div class=card><h3>Connexion / Inscription</h3>
+  <input id=em type=email placeholder="Adresse e-mail"><input id=pw type=password placeholder="Mot de passe (8 caractères min.)">
+  <button onclick="auth('in')">Se connecter</button><button class=s onclick="auth('up')">Créer un compte</button>
+  <button class=s onclick="reset()">Mot de passe oublié</button>${e?msg(e):""}</div>`}
+async function auth(m){ const em=$("em").value.trim(), pw=$("pw").value;
+  if(pw.length<8) return authView("Mot de passe trop court (8 caractères minimum).");
+  const r=m=="in"?await db.auth.signInWithPassword({email:em,password:pw}):await db.auth.signUp({email:em,password:pw});
+  if(r.error) return authView(r.error.message);
+  if(m=="up"&&!r.data.session) return authView("Compte créé. Confirme ton e-mail puis connecte-toi.");
+  init()}
+async function reset(){const em=$("em").value.trim(); if(!em) return authView("Écris d'abord ton e-mail.");
+  const r=await db.auth.resetPasswordForEmail(em); authView(r.error?r.error.message:"E-mail de réinitialisation envoyé.")}
+async function out(){await db.auth.signOut(); shop=null; init()}
+function shopView(e){ $("nav").hidden=true;
+  app.innerHTML=`<div class=card><h3>Crée ta boutique</h3><input id=sn placeholder="Nom de la boutique">
+  <button onclick="mkShop()">Créer</button>${e?msg(e):""}</div>`}
+async function mkShop(){const {error}=await db.rpc("create_shop",{p_name:$("sn").value.trim()}); error?shopView(error):init()}
+
+function go(v){({home,prod,sale,exp})[v]()}
+async function home(){
+  const [s,p,x,pr]=await Promise.all([
+    db.from("sales").select("total,cogs").eq("status","valid"),
+    db.from("payments").select("amount,sale_id,sales!inner(status)").eq("sales.status","valid"),
+    db.from("expenses").select("amount"),
+    db.from("products").select("name,stock,alert_threshold").eq("active",true)]);
+  const sum=(a,k)=>(a.data||[]).reduce((t,r)=>t+r[k],0);
+  const ca=sum(s,"total"), cogs=sum(s,"cogs"), enc=sum(p,"amount"), dep=sum(x,"amount");
+  const low=(pr.data||[]).filter(r=>r.stock<=r.alert_threshold);
+  app.innerHTML=`<div class=k>
+  <div class=card>Chiffre d'affaires<b>${F(ca)}</b></div><div class=card>Encaissé<b>${F(enc)}</b></div>
+  <div class=card>Dépenses<b>${F(dep)}</b></div><div class=card>Marge brute<b>${F(ca-cogs)}</b></div>
+  <div class=card>Bénéfice estimé<b>${F(ca-cogs-dep)}</b></div><div class=card>Crédits clients<b>${F(ca-enc)}</b></div></div>
+  <div class=card><b>Stock faible</b>${low.map(r=>`<div class=low>${esc(r.name)} : ${r.stock}</div>`).join("")||"<div>Aucun</div>"}</div>
+  <p><small>Totaux de toutes les périodes. Les filtres par période arrivent au lot 2.</small></p>`}
+async function prod(e){
+  const {data}=await db.from("products").select("*").eq("active",true).order("name");
+  app.innerHTML=`<div class=card><b>Nouveau produit</b><input id=pn placeholder="Nom"><input id=pc placeholder="Catégorie">
+  <input id=pa type=number min=0 placeholder="Prix d'achat"><input id=pv type=number min=0 placeholder="Prix de vente">
+  <input id=ps type=number min=0 placeholder="Quantité en stock"><button onclick="addProd()">Ajouter</button>${e?msg(e):""}</div>`+
+  (data||[]).map(r=>`<div class=card><b>${esc(r.name)}</b> ${esc(r.category||"")}<br>Achat ${F(r.cost_price)} · Vente ${F(r.sale_price)}<br>
+  Stock : <b class="${r.stock<=r.alert_threshold?"low":""}">${r.stock}</b></div>`).join("")}
+async function addProd(){ if(busy) return; busy=true;
+  const q=$("ps").value||0, row={shop_id:shop.id,name:$("pn").value.trim(),category:$("pc").value.trim()||null,
+   cost_price:parseInt($("pa").value),sale_price:parseInt($("pv").value),stock:0};
+  if(!row.name||isNaN(row.cost_price)||isNaN(row.sale_price)){busy=false;return prod("Nom et prix obligatoires.")}
+  const r=await db.from("products").insert(row).select().single();
+  if(!r.error&&q>0){ // le stock initial passe par une fonction sécurisée et tracée
+    const s=await db.rpc("add_stock",{p_shop:shop.id,p_product:r.data.id,p_qty:parseInt(q),p_note:"Stock initial"});
+    if(s.error){busy=false;return prod(s.error)}}
+  busy=false; prod(r.error)}
+async function sale(e){
+  const {data}=await db.from("products").select("*").eq("active",true).gt("stock",0).order("name");
+  window._p=data||[]; const tot=cart.reduce((t,i)=>t+i.price*i.qty,0);
+  app.innerHTML=`<div class=card><b>Nouvelle vente</b><select id=sp>${_p.map(r=>`<option value=${r.id}>${esc(r.name)} (${r.stock}) ${F(r.sale_price)}</option>`).join("")}</select>
+  <input id=sq type=number min=1 value=1><button class=s onclick="addCart()">Ajouter au panier</button>
+  ${cart.map(i=>`<div>${esc(i.name)} × ${i.qty} = ${F(i.price*i.qty)}</div>`).join("")}<h3>Total : ${F(tot)}</h3>
+  <input id=sd type=number min=0 placeholder="Réduction (FCFA, max 50 %)"><input id=spd type=number min=0 placeholder="Montant payé maintenant (0 = crédit)">
+  <input id=cn placeholder="Nom du client (obligatoire si crédit)"><button onclick="valSale()">Valider la vente</button>${e?msg(e):""}</div>`}
+function addCart(){const p=_p.find(r=>r.id==$("sp").value), q=parseInt($("sq").value);
+  if(!p||!(q>0)) return; if(q>p.stock) return sale("Stock insuffisant.");
+  const l=cart.find(i=>i.id==p.id); l?l.qty+=q:cart.push({id:p.id,name:p.name,price:p.sale_price,qty:q}); sale()}
+async function valSale(){ if(busy||!cart.length) return sale("Le panier est vide."); busy=true;
+  try{ const tot=cart.reduce((t,i)=>t+i.price*i.qty,0), disc=parseInt($("sd").value)||0;
+    const paidRaw=$("spd").value, paid=paidRaw===""?tot-disc:parseInt(paidRaw)||0, name=$("cn").value.trim(); let cid=null;
+    if(name){const c=await db.from("customers").insert({shop_id:shop.id,name}).select().single(); if(c.error) throw c.error; cid=c.data.id}
+    const r=await db.rpc("create_sale",{p_shop:shop.id,p_key:saleKey,p_customer:cid,
+      p_items:cart.map(i=>({product_id:i.id,qty:i.qty})),p_discount:disc,p_paid:paid});
+    if(r.error) throw r.error; cart=[]; saleKey=crypto.randomUUID(); busy=false; home()
+  }catch(e){busy=false; sale(e)}}
+async function exp(e){
+  const {data}=await db.from("expenses").select("*").order("spent_on",{ascending:false}).limit(30);
+  app.innerHTML=`<div class=card><b>Nouvelle dépense</b><input id=ec placeholder="Catégorie (loyer, transport…)">
+  <input id=ea type=number min=1 placeholder="Montant"><input id=ed placeholder="Description"><button onclick="addExp()">Ajouter</button>${e?msg(e):""}</div>`+
+  (data||[]).map(r=>`<div class=card>${esc(r.spent_on)} · ${esc(r.category)} · <b>${F(r.amount)}</b><br>${esc(r.description||"")}</div>`).join("")}
+async function addExp(){ if(busy) return; busy=true; const a=parseInt($("ea").value);
+  if(!(a>0)||!$("ec").value.trim()){busy=false;return exp("Catégorie et montant obligatoires.")}
+  const r=await db.from("expenses").insert({shop_id:shop.id,category:$("ec").value.trim(),amount:a,description:$("ed").value.trim()||null});
+  busy=false; exp(r.error)}
+init();
+</script></body></html>
