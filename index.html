@@ -12,7 +12,7 @@ main{padding:12px;max-width:640px;margin:auto;padding-bottom:80px}
 input,select,button{width:100%;padding:12px;margin:5px 0;border:1px solid #ccd;border-radius:8px;font-size:16px}
 button{background:var(--g);color:#fff;border:0;font-weight:700}button.s{background:#e5e7eb;color:var(--t)}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#fff;border-top:1px solid #ddd}
-nav button{background:none;color:var(--t);border:0;border-radius:0;margin:0;font-size:13px}
+nav button{background:none;color:var(--t);border:0;border-radius:0;margin:0;font-size:11px;padding:10px 2px}
 .k{display:grid;grid-template-columns:1fr 1fr;gap:8px}.k b{display:block;font-size:18px}
 .err{color:#b91c1c}.low{color:#b45309}
 </style></head><body>
@@ -20,7 +20,7 @@ nav button{background:none;color:var(--t);border:0;border-radius:0;margin:0;font
 <main id="app">Chargement…</main>
 <nav id="nav" hidden>
 <button onclick="go('home')">Accueil</button><button onclick="go('prod')">Produits</button>
-<button onclick="go('sale')">Vente</button><button onclick="go('exp')">Dépenses</button>
+<button onclick="go('sale')">Vente</button><button onclick="go('hist')">Ventes</button><button onclick="go('cred')">Crédits</button><button onclick="go('exp')">Dépenses</button>
 <button onclick="out()">Quitter</button></nav>
 <script>
 // ===== À REMPLIR (clés PUBLIQUES du projet Supabase : Project Settings > API) =====
@@ -60,7 +60,7 @@ function shopView(e){ $("nav").hidden=true;
   <button onclick="mkShop()">Créer</button>${e?msg(e):""}</div>`}
 async function mkShop(){const {error}=await db.rpc("create_shop",{p_name:$("sn").value.trim()}); error?shopView(error):init()}
 
-function go(v){({home,prod,sale,exp})[v]()}
+function go(v){({home,prod,sale,exp,hist,cred})[v]()}
 async function home(){
   const [s,p,x,pr]=await Promise.all([
     db.from("sales").select("total,cogs").eq("status","valid"),
@@ -82,7 +82,7 @@ async function prod(e){
   <input id=pa type=number min=0 placeholder="Prix d'achat"><input id=pv type=number min=0 placeholder="Prix de vente">
   <input id=ps type=number min=0 placeholder="Quantité en stock"><button onclick="addProd()">Ajouter</button>${e?msg(e):""}</div>`+
   (data||[]).map(r=>`<div class=card><b>${esc(r.name)}</b> ${esc(r.category||"")}<br>Achat ${F(r.cost_price)} · Vente ${F(r.sale_price)}<br>
-  Stock : <b class="${r.stock<=r.alert_threshold?"low":""}">${r.stock}</b></div>`).join("")}
+  Stock : <b class="${r.stock<=r.alert_threshold?"low":""}">${r.stock}</b><input id=a${r.id.slice(0,8)} type=number min=1 placeholder="Quantité à ajouter"><button class=s onclick="addS('${r.id}','a${r.id.slice(0,8)}')">Ajouter au stock</button></div>`).join("")}
 async function addProd(){ if(busy) return; busy=true;
   const q=$("ps").value||0, row={shop_id:shop.id,name:$("pn").value.trim(),category:$("pc").value.trim()||null,
    cost_price:parseInt($("pa").value),sale_price:parseInt($("pv").value),stock:0};
@@ -98,18 +98,20 @@ async function sale(e){
   app.innerHTML=`<div class=card><b>Nouvelle vente</b><select id=sp>${_p.map(r=>`<option value=${r.id}>${esc(r.name)} (${r.stock}) ${F(r.sale_price)}</option>`).join("")}</select>
   <input id=sq type=number min=1 value=1><button class=s onclick="addCart()">Ajouter au panier</button>
   ${cart.map(i=>`<div>${esc(i.name)} × ${i.qty} = ${F(i.price*i.qty)}</div>`).join("")}<h3>Total : ${F(tot)}</h3>
-  <input id=sd type=number min=0 placeholder="Réduction (FCFA, max 50 %)"><input id=spd type=number min=0 placeholder="Montant payé maintenant (0 = crédit)">
+  <input id=sd type=number min=0 oninput="chg()" placeholder="Réduction (FCFA, max 50 %)"><input id=spd type=number min=0 oninput="chg()" placeholder="Argent donné par le client (vide = exact, 0 = crédit)"><div id=mon></div><button class=s onclick="sayTot()">🔊 Lire à voix haute</button>
   <input id=cn placeholder="Nom du client (obligatoire si crédit)"><button onclick="valSale()">Valider la vente</button>${e?msg(e):""}</div>`}
 function addCart(){const p=_p.find(r=>r.id==$("sp").value), q=parseInt($("sq").value);
   if(!p||!(q>0)) return; if(q>p.stock) return sale("Stock insuffisant.");
   const l=cart.find(i=>i.id==p.id); l?l.qty+=q:cart.push({id:p.id,name:p.name,price:p.sale_price,qty:q}); sale()}
 async function valSale(){ if(busy||!cart.length) return sale("Le panier est vide."); busy=true;
   try{ const tot=cart.reduce((t,i)=>t+i.price*i.qty,0), disc=parseInt($("sd").value)||0;
-    const paidRaw=$("spd").value, paid=paidRaw===""?tot-disc:parseInt(paidRaw)||0, name=$("cn").value.trim(); let cid=null;
+    const paidRaw=$("spd").value, given=paidRaw===""?tot-disc:parseInt(paidRaw)||0, paid=Math.min(given,tot-disc), name=$("cn").value.trim(); let cid=null;
     if(name){const c=await db.from("customers").insert({shop_id:shop.id,name}).select().single(); if(c.error) throw c.error; cid=c.data.id}
     const r=await db.rpc("create_sale",{p_shop:shop.id,p_key:saleKey,p_customer:cid,
       p_items:cart.map(i=>({product_id:i.id,qty:i.qty})),p_discount:disc,p_paid:paid});
-    if(r.error) throw r.error; cart=[]; saleKey=crypto.randomUUID(); busy=false; home()
+    if(r.error) throw r.error; const rend=given-(tot-disc); cart=[]; saleKey=crypto.randomUUID(); busy=false;
+    if(rend>0){say("Monnaie à rendre : "+rend+" francs CFA");alert("Monnaie à rendre : "+F(rend))}else say("Vente enregistrée");
+    home()
   }catch(e){busy=false; sale(e)}}
 async function exp(e){
   const {data}=await db.from("expenses").select("*").order("spent_on",{ascending:false}).limit(30);
@@ -120,5 +122,30 @@ async function addExp(){ if(busy) return; busy=true; const a=parseInt($("ea").va
   if(!(a>0)||!$("ec").value.trim()){busy=false;return exp("Catégorie et montant obligatoires.")}
   const r=await db.from("expenses").insert({shop_id:shop.id,category:$("ec").value.trim(),amount:a,description:$("ed").value.trim()||null});
   busy=false; exp(r.error)}
+function say(t){try{const u=new SpeechSynthesisUtterance(t);u.lang="fr-FR";speechSynthesis.cancel();speechSynthesis.speak(u)}catch(e){}}
+function net(){return cart.reduce((t,i)=>t+i.price*i.qty,0)-(parseInt($("sd").value)||0)}
+function chg(){const el=$("mon"),g=$("spd").value; if(g===""||!cart.length){el.innerHTML="";return}
+  const n=net(),x=parseInt(g)||0;
+  el.innerHTML=x>=n?`<h2>Monnaie à rendre : ${F(x-n)}</h2>`:`<h2 class=low>Reste à payer (crédit) : ${F(n-x)}</h2>`}
+function sayTot(){const n=net(),g=$("spd").value; let t="Le total est de "+n+" francs CFA.";
+  if(g!==""){const x=parseInt(g)||0; t+=x>=n?" Monnaie à rendre : "+(x-n)+" francs.":" Reste à payer : "+(n-x)+" francs."} say(t)}
+async function addS(id,i){ if(busy) return; const q=parseInt($(i).value); if(!(q>0)) return prod("Quantité invalide.");
+  busy=true; const r=await db.rpc("add_stock",{p_shop:shop.id,p_product:id,p_qty:q,p_note:"Entrée de stock"}); busy=false; prod(r.error)}
+async function cred(e){
+  const {data}=await db.from("sales").select("id,total,created_at,customers(name),payments(amount)").eq("status","valid").order("created_at",{ascending:false});
+  const r=(data||[]).map(s=>({...s,due:s.total-(s.payments||[]).reduce((t,p)=>t+p.amount,0)})).filter(s=>s.due>0);
+  const tot=r.reduce((t,s)=>t+s.due,0);
+  app.innerHTML=`<h3>Crédits clients : <span class=low>${F(tot)}</span></h3>`+(e?msg(e):"")+(r.map(s=>`<div class=card><b>${esc(s.customers?.name||"Client")}</b> · ${new Date(s.created_at).toLocaleDateString("fr-FR")}<br>Reste dû : <b class=low>${F(s.due)}</b>
+  <input id=r${s.id.slice(0,8)} type=number min=1 placeholder="Montant reçu"><button onclick="pay('${s.id}','r${s.id.slice(0,8)}')">Enregistrer le paiement</button></div>`).join("")||"<div class=card>Aucun crédit en cours.</div>")}
+async function pay(id,i){ if(busy) return; const a=parseInt($(i).value); if(!(a>0)) return cred("Écris le montant reçu.");
+  busy=true; const r=await db.rpc("add_payment",{p_shop:shop.id,p_sale:id,p_amount:a}); busy=false;
+  if(!r.error) say("Paiement enregistré"); cred(r.error)}
+async function hist(e){
+  const {data}=await db.from("sales").select("id,total,status,cancel_reason,created_at,customers(name)").order("created_at",{ascending:false}).limit(30);
+  app.innerHTML=`<h3>Historique des ventes</h3>`+(e?msg(e):"")+(data||[]).map(s=>`<div class=card>${new Date(s.created_at).toLocaleString("fr-FR")} · <b>${F(s.total)}</b> ${esc(s.customers?.name||"")}<br>`+
+  (s.status=="valid"?`<input id=m${s.id.slice(0,8)} placeholder="Motif d'annulation"><button class=s onclick="cancel('${s.id}','m${s.id.slice(0,8)}')">Annuler cette vente</button>`:`<span class=err>Annulée : ${esc(s.cancel_reason)}</span>`)+`</div>`).join("")}
+async function cancel(id,i){ if(busy) return; const m=$(i).value.trim(); if(m.length<3) return hist("Écris le motif de l'annulation.");
+  if(!confirm("Annuler cette vente ? Le stock sera remis.")) return;
+  busy=true; const r=await db.rpc("cancel_sale",{p_shop:shop.id,p_sale:id,p_reason:m}); busy=false; hist(r.error)}
 init();
 </script></body></html>
